@@ -5,7 +5,7 @@ use anchor_spl::token::{self, SetAuthority, TokenAccount};
 declare_id!("ECh7FQHy1hDxkiYjPVi8tYhmZ2oHE1zJqsyxbP4vS3nd");
 
 #[program]
-pub mod anchor_escrow {
+pub mod solana_escrow_anchor {
     use spl_token::instruction::AuthorityType;
     use super::*;
 
