@@ -14,6 +14,7 @@ pub mod anchor_escrow {
     pub fn initialize(ctx: Context<Initialize>, amount: u64) -> ProgramResult {
         // Store data in escrow account
         let escrow_account = &mut ctx.accounts.escrow_account;
+        escrow_account.is_initialized = true;
         escrow_account.initializer_pubkey = *ctx.accounts.initializer.to_account_info().key;
         escrow_account.temp_token_account_pubkey = *ctx.accounts.temp_token_account.to_account_info().key;
         escrow_account.initializer_token_to_receive_account_pubkey = *ctx.accounts.token_to_receive_account.to_account_info().key;
@@ -39,7 +40,8 @@ pub struct Initialize<'info> {
     pub token_to_receive_account: Account<'info, TokenAccount>,
     #[account(
         init, payer = initializer, space = Escrow::LEN,
-        constraint = !(&Rent::get()?).is_exempt(escrow_account.to_account_info().lamports(), escrow_account.to_account_info().data_len())
+        constraint = !(&Rent::get()?).is_exempt(escrow_account.to_account_info().lamports(), escrow_account.to_account_info().data_len()),
+        constraint = !escrow_account.is_initialized
     )]
     pub escrow_account: Account<'info, Escrow>,
     #[account(address = spl_token::id())]
@@ -50,6 +52,7 @@ pub struct Initialize<'info> {
 
 #[account]
 pub struct Escrow {
+    pub is_initialized: bool,
     pub initializer_pubkey: Pubkey,
     pub temp_token_account_pubkey: Pubkey,
     pub initializer_token_to_receive_account_pubkey: Pubkey,
@@ -57,11 +60,13 @@ pub struct Escrow {
 }
 
 const DISCRIMINATOR_LENGTH: usize = 8;
+const BOOL_LENGTH: usize = 1;
 const PUBLIC_KEY_LENGTH: usize = 32;
 const U64_LENGTH: usize = 8;
 
 impl Escrow {
     const LEN: usize = DISCRIMINATOR_LENGTH +
+        BOOL_LENGTH +
         PUBLIC_KEY_LENGTH * 3 +
         U64_LENGTH;
 }
