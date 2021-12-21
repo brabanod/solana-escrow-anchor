@@ -12,6 +12,7 @@ pub mod solana_escrow_anchor {
     const ESCROW_PDA_SEED: &[u8] = b"escrow";
 
     pub fn initialize(ctx: Context<Initialize>, amount: u64) -> ProgramResult {
+        msg!("XKOP - Made it till here");
         // Store data in escrow account
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.is_initialized = true;
@@ -19,6 +20,10 @@ pub mod solana_escrow_anchor {
         escrow_account.temp_token_account_pubkey = *ctx.accounts.temp_token_account.to_account_info().key;
         escrow_account.initializer_token_to_receive_account_pubkey = *ctx.accounts.token_to_receive_account.to_account_info().key;
         escrow_account.expected_amount = amount;
+
+        if !(&Rent::get()?).is_exempt(escrow_account.to_account_info().lamports(), escrow_account.to_account_info().data_len()) {
+            msg!("XKOP - ouch");
+        }
 
         // Create PDA, which will own the temp token account
         let (pda, _bump_seed) = Pubkey::find_program_address(&[ESCROW_PDA_SEED], ctx.program_id);
@@ -35,13 +40,12 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub temp_token_account: Account<'info, TokenAccount>,
     #[account(
-        constraint = *token_to_receive_account.to_account_info().owner == spl_token::id()
+        constraint = *token_to_receive_account.to_account_info().owner == spl_token::id() @ ProgramError::IncorrectProgramId
     )]
     pub token_to_receive_account: Account<'info, TokenAccount>,
     #[account(
         init, payer = initializer, space = Escrow::LEN,
-        constraint = !(&Rent::get()?).is_exempt(escrow_account.to_account_info().lamports(), escrow_account.to_account_info().data_len()),
-        constraint = !escrow_account.is_initialized
+        constraint = !escrow_account.is_initialized @ ProgramError::AccountAlreadyInitialized
     )]
     pub escrow_account: Account<'info, Escrow>,
     #[account(address = spl_token::id())]
