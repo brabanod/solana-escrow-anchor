@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_program;
-use anchor_spl::token::{self, SetAuthority, TokenAccount};
+use anchor_spl::token::{self, CloseAccount, SetAuthority, TokenAccount, Transfer};
 
 declare_id!("ECh7FQHy1hDxkiYjPVi8tYhmZ2oHE1zJqsyxbP4vS3nd");
 
@@ -12,7 +12,6 @@ pub mod solana_escrow_anchor {
     const ESCROW_PDA_SEED: &[u8] = b"escrow";
 
     pub fn initialize(ctx: Context<Initialize>, amount: u64) -> ProgramResult {
-        msg!("XKOP - Made it till here");
         // Store data in escrow account
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.is_initialized = true;
@@ -21,13 +20,35 @@ pub mod solana_escrow_anchor {
         escrow_account.initializer_token_to_receive_account_pubkey = *ctx.accounts.token_to_receive_account.to_account_info().key;
         escrow_account.expected_amount = amount;
 
-        if !(&Rent::get()?).is_exempt(escrow_account.to_account_info().lamports(), escrow_account.to_account_info().data_len()) {
-            msg!("XKOP - ouch");
-        }
-
         // Create PDA, which will own the temp token account
         let (pda, _bump_seed) = Pubkey::find_program_address(&[ESCROW_PDA_SEED], ctx.program_id);
         token::set_authority(ctx.accounts.into(), AuthorityType::AccountOwner, Some(pda))?;
+
+        Ok(())
+    }
+
+    pub fn exchange(ctx: Context<Exchange>, amount_expected_by_taker: u64) -> ProgramResult {
+        let escrow_account = &ctx.accounts.escrow_account;
+
+        // Ensure that expected and deposited amount match
+        if amount_expected_by_taker != ctx.accounts.pdas_temp_token_account.amount {
+            return Err(ErrorCode::ExpectedAmountMismatch.into());
+        }
+
+        // Get PDA
+        let (_pda, bump_seed) = Pubkey::find_program_address(&[ESCROW_PDA_SEED], ctx.program_id);
+        let seeds = &[&ESCROW_PDA_SEED[..], &[bump_seed]];
+
+        // Transfer tokens from taker to initializer
+        token::transfer(
+            ctx.accounts.into_transfer_to_initializer_context().with_signer(&[&seeds[..]]),
+            escrow_account.expected_amount)?;
+
+        // Transfer tokens from initializer to taker
+        token::transfer(ctx.accounts.into_transfer_to_taker_context(), amount_expected_by_taker)?;
+
+        // Close temp token account
+        token::close_account(ctx.accounts.into_close_temp_token_context().with_signer(&[&seeds[..]]))?;
 
         Ok(())
     }
@@ -51,7 +72,33 @@ pub struct Initialize<'info> {
     #[account(address = spl_token::id())]
     pub token_program: AccountInfo<'info>,
     #[account(address = system_program::ID)]
-    pub system_program: AccountInfo<'info>,
+    pub system_program: AccountInfo<'info>, // needed for init escrow_init
+}
+
+#[derive(Accounts)]
+pub struct Exchange<'info> {
+    #[account(mut)]
+    pub taker: Signer<'info>,
+    #[account(mut)]
+    pub takers_sending_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub takers_token_to_receive_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub pdas_temp_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub initializers_main_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub initializers_token_to_receive_account: Account<'info, TokenAccount>,
+    #[account(mut, close = initializers_main_account,
+        constraint = escrow_account.temp_token_account_pubkey == *pdas_temp_token_account.to_account_info().key @ ProgramError::InvalidAccountData,
+        constraint = escrow_account.initializer_pubkey == *initializers_main_account.to_account_info().key @ ProgramError::InvalidAccountData,
+        constraint = escrow_account.initializer_token_to_receive_account_pubkey == *initializers_token_to_receive_account.to_account_info().key @ ProgramError::InvalidAccountData,
+    )]
+    pub escrow_account: Account<'info, Escrow>,
+    #[account(address = spl_token::id())]
+    pub token_program: AccountInfo<'info>,
+    #[account()]
+    pub pda_account: AccountInfo<'info>,
 }
 
 #[account]
@@ -82,6 +129,44 @@ impl<'info> From<&mut Initialize<'info>> for CpiContext<'_, '_, '_, 'info, SetAu
             account_or_mint: accounts.temp_token_account.to_account_info().clone(),
         };
         let cpi_program = accounts.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+}
+
+#[error]
+pub enum ErrorCode {
+    #[msg("Amount expected by taker does not match the deposited amount of intitializer.")]
+    ExpectedAmountMismatch,
+}
+
+impl<'info> Exchange<'info> {
+    fn into_transfer_to_initializer_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.takers_sending_token_account.to_account_info().clone(),
+            to: self.initializers_token_to_receive_account.to_account_info().clone(),
+            authority: self.taker.to_account_info().clone(),
+        };
+        let cpi_program = self.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+
+    fn into_transfer_to_taker_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.pdas_temp_token_account.to_account_info().clone(),
+            to: self.takers_token_to_receive_account.to_account_info().clone(),
+            authority: self.pda_account.clone(),
+        };
+        let cpi_program = self.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+
+    fn into_close_temp_token_context(&self) -> CpiContext<'_, '_, '_, 'info, CloseAccount<'info>> {
+        let cpi_accounts = CloseAccount {
+            account: self.pdas_temp_token_account.to_account_info().clone(),
+            destination: self.initializers_main_account.to_account_info().clone(),
+            authority: self.pda_account.to_account_info().clone(),
+        };
+        let cpi_program = self.token_program.to_account_info();
         CpiContext::new(cpi_program, cpi_accounts)
     }
 }
