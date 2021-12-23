@@ -94,7 +94,7 @@ pub struct Exchange<'info> {
         constraint = escrow_account.initializer_pubkey == *initializers_main_account.to_account_info().key @ ProgramError::InvalidAccountData,
         constraint = escrow_account.initializer_token_to_receive_account_pubkey == *initializers_token_to_receive_account.to_account_info().key @ ProgramError::InvalidAccountData,
     )]
-    pub escrow_account: Account<'info, Escrow>,
+    pub escrow_account: Box<Account<'info, Escrow>>,
     #[account(address = spl_token::id())]
     pub token_program: AccountInfo<'info>,
     #[account()]
