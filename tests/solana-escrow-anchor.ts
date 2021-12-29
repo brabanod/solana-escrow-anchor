@@ -20,6 +20,8 @@ describe('solana-escrow-anchor', () => {
 
     const program = anchor.workspace.SolanaEscrowAnchor as Program<SolanaEscrowAnchor>;
 
+    const ESCROW_PDA_SEED = "escrow";
+
     it('Setup', async () => {
         const createMint = (payer: Signer): Promise<Token> => {
             return Token.createMint(
@@ -112,7 +114,6 @@ describe('solana-escrow-anchor', () => {
     });
 
     it("Alice", async () => {
-        const escrowProgramId = getProgramId();
         const terms = getTerms();
 
         const aliceXTokenAccountPubkey = getPublicKey("alice_x");
@@ -160,7 +161,7 @@ describe('solana-escrow-anchor', () => {
 
         console.log("Sending Alice's transaction...");
         let initTx = await program.rpc.initialize(
-            new anchor.BN(50),
+            new anchor.BN(terms.aliceExpectedAmount),
             {
                 accounts: {
                     initializer: aliceKeypair.publicKey,
@@ -222,5 +223,94 @@ describe('solana-escrow-anchor', () => {
             },
         ]);
         console.log("");
-    })
+    });
+
+    it("Bob", async () => {
+        const bobKeypair = getKeypair("bob");
+        const bobXTokenAccountPubkey = getPublicKey("bob_x");
+        const bobYTokenAccountPubkey = getPublicKey("bob_y");
+        const escrowStateAccountPubkey = getPublicKey("escrow");
+        const escrowProgramId = getProgramId();
+        const terms = getTerms();
+
+        const escrow = await program.account.escrow.fetch(escrowStateAccountPubkey);
+        assert.ok(escrow, "Could not find escrow at given address!");
+
+        const PDA = await PublicKey.findProgramAddress(
+            [Buffer.from(ESCROW_PDA_SEED)],
+            escrowProgramId,
+        );
+
+        const aliceYTokenAccountPubkey = getPublicKey("alice_y");
+        const [aliceYbalance, bobXbalance] = await Promise.all([
+            getTokenBalance(aliceYTokenAccountPubkey, provider.connection),
+            getTokenBalance(bobXTokenAccountPubkey, provider.connection),
+        ]);
+
+        console.log("Sending Bob's transaction...");
+        const exchangeTx = await program.rpc.exchange(
+            new anchor.BN(terms.bobExpectedAmount),
+            {
+                accounts: {
+                    taker: bobKeypair.publicKey,
+                    takersSendingTokenAccount: bobYTokenAccountPubkey,
+                    takersTokenToReceiveAccount: bobXTokenAccountPubkey,
+                    pdasTempTokenAccount: escrow.tempTokenAccountPubkey,
+                    initializersMainAccount: escrow.initializerPubkey,
+                    initializersTokenToReceiveAccount: escrow.initializerTokenToReceiveAccountPubkey,
+                    escrowAccount: escrowStateAccountPubkey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    pdaAccount: PDA[0],
+                },
+                signers: [bobKeypair],
+            }
+        );
+        await provider.connection.confirmTransaction(exchangeTx, "confirmed");
+
+        assert.equal(
+            await provider.connection.getAccountInfo(escrowStateAccountPubkey),
+            null,
+            "Escrow account has not been closed."
+        );
+        assert.equal(
+            await provider.connection.getAccountInfo(escrow.tempTokenAccountPubkey),
+            null,
+            "Temp X token account has not been closed."
+        );
+
+        const [newAliceYbalance, newBobXbalance] = await Promise.all([
+            getTokenBalance(aliceYTokenAccountPubkey, provider.connection),
+            getTokenBalance(bobXTokenAccountPubkey, provider.connection),
+        ]);
+
+        assert.equal(
+            newAliceYbalance,
+            aliceYbalance + terms.aliceExpectedAmount,
+            `Alice's Y balance should be ${aliceYbalance + terms.aliceExpectedAmount} but is ${newAliceYbalance}`
+        );
+        assert.equal(
+            newBobXbalance,
+            bobXbalance + terms.bobExpectedAmount,
+            `Bob's X balance should be ${bobXbalance + terms.bobExpectedAmount} but is ${newBobXbalance}`
+        );
+
+        console.log(
+            "✨Trade successfully executed. All temporary accounts closed✨\n"
+        );
+        console.table([
+            {
+                "Alice Token Account X": await getTokenBalance(
+                    getPublicKey("alice_x"),
+                    provider.connection
+                ),
+                "Alice Token Account Y": newAliceYbalance,
+                "Bob Token Account X": newBobXbalance,
+                "Bob Token Account Y": await getTokenBalance(
+                    bobYTokenAccountPubkey,
+                    provider.connection
+                ),
+            },
+        ]);
+        console.log("");
+    });
 });
