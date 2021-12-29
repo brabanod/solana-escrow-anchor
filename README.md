@@ -6,18 +6,18 @@ Escrow program (presented in [this tutorial](https://paulx.dev/blog/2021/01/14/p
 ## Run
 
 Run all tests
-```
-anchor test
+```console
+$ anchor test
 ```
 
 Run tests isolated
 ```console
-anchor localnet
-// New Terminal
+$ anchor localnet
 
-anchor run test-setup
-anchor run test-alice
-anchor run test-bob
+// new terminal
+$ anchor run test-setup
+$ anchor run test-alice
+$ anchor run test-bob
 ```
 
 ## Credits
