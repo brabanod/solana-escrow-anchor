@@ -41,11 +41,13 @@ pub mod solana_escrow_anchor {
 
         // Transfer tokens from taker to initializer
         token::transfer(
-            ctx.accounts.into_transfer_to_initializer_context().with_signer(&[&seeds[..]]),
+            ctx.accounts.into_transfer_to_initializer_context(),
             escrow_account.expected_amount)?;
 
         // Transfer tokens from initializer to taker
-        token::transfer(ctx.accounts.into_transfer_to_taker_context(), amount_expected_by_taker)?;
+        token::transfer(
+            ctx.accounts.into_transfer_to_taker_context().with_signer(&[&seeds[..]]),
+            amount_expected_by_taker)?;
 
         // Close temp token account
         token::close_account(ctx.accounts.into_close_temp_token_context().with_signer(&[&seeds[..]]))?;
@@ -86,7 +88,7 @@ pub struct Exchange<'info> {
     #[account(mut)]
     pub pdas_temp_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
-    pub initializers_main_account: Account<'info, TokenAccount>,
+    pub initializers_main_account: AccountInfo<'info>,
     #[account(mut)]
     pub initializers_token_to_receive_account: Account<'info, TokenAccount>,
     #[account(mut, close = initializers_main_account,
@@ -97,7 +99,6 @@ pub struct Exchange<'info> {
     pub escrow_account: Box<Account<'info, Escrow>>,
     #[account(address = spl_token::id())]
     pub token_program: AccountInfo<'info>,
-    #[account()]
     pub pda_account: AccountInfo<'info>,
 }
 
@@ -163,8 +164,8 @@ impl<'info> Exchange<'info> {
     fn into_close_temp_token_context(&self) -> CpiContext<'_, '_, '_, 'info, CloseAccount<'info>> {
         let cpi_accounts = CloseAccount {
             account: self.pdas_temp_token_account.to_account_info().clone(),
-            destination: self.initializers_main_account.to_account_info().clone(),
-            authority: self.pda_account.to_account_info().clone(),
+            destination: self.initializers_main_account.clone(),
+            authority: self.pda_account.clone(),
         };
         let cpi_program = self.token_program.to_account_info();
         CpiContext::new(cpi_program, cpi_accounts)
